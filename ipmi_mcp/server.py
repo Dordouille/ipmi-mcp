@@ -51,11 +51,11 @@ def _ann(**kwargs):
     return ToolAnnotations(**kwargs) if ToolAnnotations else None
 
 
-def _run_and_format(command: str, tool: str, kind: Kind, **extra) -> str:
+def _run_and_format(command: str, tool: str, kind: Kind, use_cache: bool = True, **extra) -> str:
     ipmi = _get_ipmi()
     start = time.time()
     try:
-        result = ipmi.run(command)
+        result = ipmi.run(command, use_cache=use_cache)
     except Exception as error:  # noqa: BLE001 - we return the error to the client
         audit.log(_audit_path(), tool=tool, command=command, kind=kind.value,
                   executed=True, error=str(error), **extra)
@@ -161,8 +161,40 @@ def ipmi_chassis_status() -> str:
 
 @mcp.tool(annotations=_ann(title="IPMI — sensors", readOnlyHint=True))
 def ipmi_sensors() -> str:
-    """List all sensor readings (temperatures, fans, voltages)."""
-    return _run_and_format("sensor list", tool="ipmi_sensors", kind=Kind.READ)
+    """List all sensor readings (temperatures, fans, voltages).
+
+    Uses ``sdr elist`` — far cheaper than ``sensor list`` on a high-latency
+    link. Call ``ipmi_refresh_sdr_cache`` once (with IPMI_SDR_CACHE set) to make
+    this near-instant even over a VPN.
+    """
+    return _run_and_format("sdr elist", tool="ipmi_sensors", kind=Kind.READ)
+
+
+@mcp.tool(annotations=_ann(title="IPMI — refresh SDR cache", readOnlyHint=True))
+def ipmi_refresh_sdr_cache() -> str:
+    """(Re)build the local SDR cache used to speed up sensor reads.
+
+    Runs ``sdr dump <IPMI_SDR_CACHE>``. This one call is slow (it reads the whole
+    SDR repository from the BMC); afterwards, sensor reads reuse the cache via
+    ``-S`` and are fast. Requires IPMI_SDR_CACHE to point at a writable path
+    (mount a volume to persist it across container runs).
+    """
+    ipmi = _get_ipmi()
+    start = time.time()
+    try:
+        result = ipmi.dump_sdr_cache()
+    except Exception as error:  # noqa: BLE001 - we return the error to the client
+        audit.log(_audit_path(), tool="ipmi_refresh_sdr_cache", executed=True, error=str(error))
+        return f"❌ Could not build the SDR cache: {error}"
+    duration = round(time.time() - start, 3)
+    audit.log(_audit_path(), tool="ipmi_refresh_sdr_cache",
+              executed=True, exit_status=result.exit_status, duration_s=duration)
+    ok = result.exit_status == 0
+    head = "✅ SDR cache built" if ok else f"⚠️ ipmitool exit={result.exit_status}"
+    lines = [f"{head} ({duration}s) — {_config.sdr_cache if _config else '?'}"]
+    if result.stderr.strip():
+        lines.append(result.stderr.rstrip())
+    return "\n".join(lines)
 
 
 @mcp.tool(annotations=_ann(title="IPMI — event log (SEL)", readOnlyHint=True))
