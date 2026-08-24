@@ -10,6 +10,7 @@ Security notes:
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -29,7 +30,7 @@ class IpmiTool:
     def __init__(self, config: Config) -> None:
         self.config = config
 
-    def _base_args(self) -> list[str]:
+    def _base_args(self, use_cache: bool = True) -> list[str]:
         cfg = self.config
         args = [
             "ipmitool",
@@ -39,6 +40,11 @@ class IpmiTool:
             "-U", cfg.user,
             "-L", cfg.priv_level,
         ]
+        # Local SDR cache (-S): skip re-reading the SDR repository from the BMC
+        # on every call — decisive on high-latency links. Populate it once with
+        # `sdr dump <path>` (see IpmiTool.dump_sdr_cache / IPMI_SDR_CACHE).
+        if use_cache and cfg.sdr_cache and os.path.exists(cfg.sdr_cache):
+            args += ["-S", cfg.sdr_cache]
         if cfg.cipher_suite:
             args += ["-C", cfg.cipher_suite]
         if cfg.password:
@@ -46,8 +52,8 @@ class IpmiTool:
             args.append("-E")
         return args
 
-    def run(self, command: str) -> CommandResult:
-        argv = self._base_args() + shlex.split(command)
+    def run(self, command: str, use_cache: bool = True) -> CommandResult:
+        argv = self._base_args(use_cache) + shlex.split(command)
         env = {"IPMI_PASSWORD": self.config.password} if self.config.password else {}
         try:
             proc = subprocess.run(
@@ -67,8 +73,22 @@ class IpmiTool:
             ) from error
         return CommandResult(command, proc.returncode, proc.stdout, proc.stderr)
 
+    def dump_sdr_cache(self) -> CommandResult:
+        """Populate the local SDR cache (``sdr dump <IPMI_SDR_CACHE>``).
+
+        This is the one slow, round-trip-heavy call; afterwards every sensor
+        read reuses the cache via ``-S`` and is fast even over a VPN. Runs
+        without ``-S`` itself (we are (re)building the cache).
+        """
+        if not self.config.sdr_cache:
+            raise RuntimeError(
+                "IPMI_SDR_CACHE is not set — cannot build an SDR cache."
+            )
+        directory = os.path.dirname(self.config.sdr_cache)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+        return self.run(f"sdr dump {self.config.sdr_cache}", use_cache=False)
+
 
 def _os_environ() -> dict[str, str]:
-    import os
-
     return dict(os.environ)

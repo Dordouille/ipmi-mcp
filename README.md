@@ -77,12 +77,35 @@ Copy `.env.example` to `.env` and fill in the BMC address and credentials:
 | Variable | Purpose |
 |---|---|
 | `IPMI_HOST` / `IPMI_PORT` | BMC address (default IPMI port 623) |
-| `IPMI_USER` / `IPMI_PASSWORD` | BMC credentials (password passed via `-E`) |
+| `IPMI_USER` | BMC user |
+| `IPMI_PASSWORD_FILE` | **Path** to a secret file holding the password (the file is mounted in; the password is never in `.env`). `IPMI_PASSWORD` remains as an inline fallback. |
 | `IPMI_INTERFACE` | `lanplus` (IPMI 2.0, recommended) or `lan` |
 | `IPMI_PRIV_LEVEL` | `ADMINISTRATOR` / `OPERATOR` / `USER` |
 | `IPMI_CIPHER_SUITE` | Optional (e.g. `3` or `17`) if the BMC requires one |
+| `IPMI_SDR_CACHE` | Path to a local SDR cache (see below) |
 | `IPMI_CMD_TIMEOUT` | Per-command timeout (s) |
 | `IPMI_AUDIT_LOG` | JSONL audit log file |
+
+**Credentials.** The BMC password is **not** stored in `.env` or anywhere in
+this repo. Put it in its own file on the host — any path and name you like,
+outside the repo — and mount that file into the container. `.env` only points at
+the in-container path (`IPMI_PASSWORD_FILE`), never at the secret itself.
+```sh
+# create the credential file (in your own shell — keep it out of logs)
+mkdir -p ~/.config/ipmi-mcp
+printf '%s' 'your-bmc-password' > ~/.config/ipmi-mcp/credential
+chmod 600 ~/.config/ipmi-mcp/credential
+# then mount it read-only when launching the container (see wiring below):
+#   -v ~/.config/ipmi-mcp/credential:/run/secrets/ipmi_password:ro
+```
+Portable and dependency-free — a plain file, no OS-specific keystore. The server
+reads `IPMI_PASSWORD_FILE`; an inline `IPMI_PASSWORD` env var still works as a
+fallback.
+
+**Sensor reads over a slow link (VPN).** `ipmitool` re-reads the whole SDR
+repository on every sensor call — dozens of round-trips, which times out over a
+high-latency link. Set `IPMI_SDR_CACHE` and call the `ipmi_refresh_sdr_cache`
+tool once to dump the SDR locally; subsequent reads reuse it (`-S`) and are fast.
 
 ### 2. Build the image
 
@@ -97,7 +120,9 @@ docker build -t ipmi-mcp .
 claude mcp add ipmi -- \
   docker run -i --rm \
     --env-file /abs/path/to/ipmi_mcp/.env \
+    -v ~/.config/ipmi-mcp/credential:/run/secrets/ipmi_password:ro \
     -v /abs/path/to/ipmi_mcp/audit:/audit \
+    -v /abs/path/to/ipmi_mcp/cache:/cache \
     ipmi-mcp
 ```
 
@@ -110,7 +135,9 @@ JSON equivalent (`.mcp.json` / Claude Desktop config; on macOS GUI apps use the 
       "args": [
         "run", "-i", "--rm",
         "--env-file", "/abs/path/to/ipmi_mcp/.env",
+        "-v", "/Users/you/.config/ipmi-mcp/credential:/run/secrets/ipmi_password:ro",
         "-v", "/abs/path/to/ipmi_mcp/audit:/audit",
+        "-v", "/abs/path/to/ipmi_mcp/cache:/cache",
         "ipmi-mcp"
       ]
     }
