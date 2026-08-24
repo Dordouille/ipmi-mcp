@@ -1,6 +1,7 @@
 # Secrets & runtime
 .env
 audit/
+cache/
 secrets/
 
 # Python
