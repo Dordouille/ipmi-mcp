@@ -1,42 +1,55 @@
-# Remote console (KVM) — plan
+# Remote console (KVM)
 
-The target BMC (ASUS ASMB8-iKVM, ASPEED AST2400) only ships a **Java (JViewer)**
-remote console delivered as a `.jnlp` (Java Web Start). Modern JREs removed Java
-Web Start, so the console no longer launches, and the last firmware for this
-generation (1.14.51, 2017) never added an HTML5 console.
+The BMC (ASUS ASMB8-iKVM, ASPEED AST2400, AMI MegaRAC) only ships a **Java
+(JViewer) remote console** delivered as a `.jnlp` via Java Web Start — removed
+from modern JREs — and its last firmware (1.14.51, 2017) never added an HTML5
+console. On top of that, the BMC only negotiates **legacy TLS**, which modern
+local browsers/JREs refuse outright. So the console cannot be opened directly
+from a current desktop.
 
-## Approach 1 — Browser (HTML5) KVM via noVNC  *(preferred)*
+## Approach 1 — Browser (HTML5) console, no local Java  *(recommended)*
 
-Run the legacy Java viewer inside a container and expose it through the browser,
-so no Java is needed on the client:
+Use [`nojava-ipmi-kvm`](https://github.com/sciapp/nojava-ipmi-kvm) (based on
+`solarkennedy/ipmi-kvm-docker`): it runs the legacy Java Web Start viewer inside
+a **Docker container** (old Java + old TLS stack) and serves it in your browser
+through **noVNC**. Nothing old is installed on your machine; the container talks
+to the BMC's legacy stack for you.
 
-```
-BMC  ──(HTTPS, downloads JViewer)──►  container
-                                        ├─ old JRE + IcedTea-Web (javaws) → runs JViewer
-                                        ├─ headless X server (Xvfb) + window manager
-                                        ├─ x11vnc  → serves the viewer's display over VNC
-                                        └─ noVNC + websockify → HTML5 in the browser
-```
-
-Result: open `http://<docker-host>:<port>/` → the full graphical KVM console.
-
-Open questions to resolve when implementing:
-- Exact JRE version the ASMB8 firmware 1.14 requires (the firmware notes say
-  "JAVA 8 update 131 or later"), and whether IcedTea-Web can launch its `.jnlp`.
-- Whether the viewer authenticates against the BMC directly or needs a session
-  token fetched from the web UI first.
-
-## Approach 2 — SOL (Serial-over-LAN)  *(complementary, text)*
-
-```
-ipmitool -I lanplus -H <bmc> -U <user> -E sol activate
+```sh
+python3 -m pip install nojava-ipmi-kvm      # Python 3.5+, needs Docker/Podman
+cp console/nojava-ipmi-kvmrc.example.yaml ~/.nojava-ipmi-kvmrc.yaml
+nojava-ipmi-kvm lszengine                   # prompts for the BMC password
 ```
 
-A text console (BIOS + OS) when serial console redirection is enabled in the
-BIOS. Simple and robust; candidate for integration as an MCP tool, though SOL is
-an interactive stream and needs care to fit the request/response tool model.
+It opens the KVM console in your browser. The provided config
+([`nojava-ipmi-kvmrc.example.yaml`](nojava-ipmi-kvmrc.example.yaml)) is tuned for
+this BMC — the AMI MegaRAC login (`rpc/WEBSES/create.asp`) and `Java/jviewer.jnlp`
+endpoints were verified live against it.
 
-## Status
+Notes:
+- The password is **prompted at runtime** — never written to disk.
+- Over a VPN the console is usable but laggy (BMC RTT can reach ~0.5–0.7 s).
+- If the applet fails to load, try another `java_version` in the config
+  (`8u91`, `7u79`) — AMI/JViewer builds are picky about the exact JRE.
 
-Not implemented yet — the initial `ipmi-mcp` release covers the IPMI control
-plane (power, sensors, SEL). This directory holds the console work.
+## Approach 2 — SOL (Serial-over-LAN), text console  *(complementary)*
+
+A lightweight text console (BIOS + OS, when serial console redirection is enabled
+in the BIOS), straight from `ipmitool`:
+
+```sh
+ipmitool -I lanplus -H 192.0.2.10 -U admin -E sol activate     # ~. to exit
+# (export IPMI_PASSWORD or pass -f <file>; deactivate a stuck session with:)
+ipmitool -I lanplus -H 192.0.2.10 -U admin -E sol deactivate
+```
+
+SOL is an interactive stream, so it lives here as a documented command rather
+than an MCP tool — the request/response tool model doesn't fit a live console.
+The MCP server still exposes `sol info` (read-only) to check SOL configuration.
+
+## Why not a firmware update or Redfish
+
+The AST2400/ASMB8 generation never received an HTML5 iKVM (that arrived with the
+AST2500/ASMB9 boards), and its Redfish support is absent/too limited to drive a
+console. Flashing the 2017 beta firmware would neither add HTML5 nor help — hence
+the containerized-viewer approach above.

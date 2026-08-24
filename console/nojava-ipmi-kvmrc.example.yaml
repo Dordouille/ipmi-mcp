@@ -1,0 +1,34 @@
+# nojava-ipmi-kvm configuration for the ASUS ASMB8-iKVM BMC (AMI MegaRAC / JViewer).
+#
+# Copy the relevant parts into ~/.nojava-ipmi-kvmrc.yaml, then run:
+#     nojava-ipmi-kvm lszengine
+# The tool spins up a container with an old Java Web Start, logs into the BMC,
+# launches the JViewer .jnlp, and serves the console in your browser via noVNC.
+# The BMC password is prompted at runtime — nothing is stored on disk.
+#
+# Endpoints below were verified live against this BMC: `rpc/WEBSES/create.asp`
+# returns HTTP 200 (AMI MegaRAC login), and the viewer is `Java/jviewer.jnlp`.
+# The BMC only speaks legacy TLS, which is exactly why the viewer must run in the
+# container's old Java stack rather than a modern local browser/JRE.
+
+hosts:
+  lszengine:
+    based_on: kvm-asmb8
+    full_hostname: 192.0.2.10
+
+templates:
+  kvm-asmb8:
+    skip_login: False
+    login_user: admin
+    login_endpoint: rpc/WEBSES/create.asp
+    # Self-signed cert + old TLS on the BMC → skip verification.
+    allow_insecure_ssl: True
+    user_login_attribute_name: WEBVAR_USERNAME
+    password_login_attribute_name: WEBVAR_PASSWORD
+    send_post_data_as_json: False
+    session_cookie_key: SessionCookie
+    download_endpoint: Java/jviewer.jnlp
+    # Firmware asks for "Java 8 update 131 or later"; 8u242 is a safe late 8.
+    # If the applet misbehaves, try 8u91 or 7u79.
+    java_version: 8u242
+    format_jnlp: False
