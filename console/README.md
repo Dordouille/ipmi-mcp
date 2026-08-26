@@ -15,22 +15,56 @@ a **Docker container** (old Java + old TLS stack) and serves it in your browser
 through **noVNC**. Nothing old is installed on your machine; the container talks
 to the BMC's legacy stack for you.
 
+### 1. Install (pinned)
+
 ```sh
-python3 -m pip install nojava-ipmi-kvm      # Python 3.5+, needs Docker/Podman
+# Python 3.13, NOT 3.14 (3.14 breaks the tool's asyncio.get_event_loop()).
+# Pin 0.9.2: 0.9.3 has no matching Docker image on Docker Hub.
+pipx install --python python3.13 nojava-ipmi-kvm==0.9.2
 cp console/nojava-ipmi-kvmrc.example.yaml ~/.nojava-ipmi-kvmrc.yaml
-nojava-ipmi-kvm lszengine                   # prompts for the BMC password
 ```
 
-It opens the KVM console in your browser. The provided config
-([`nojava-ipmi-kvmrc.example.yaml`](nojava-ipmi-kvmrc.example.yaml)) is tuned for
-this BMC — the AMI MegaRAC login (`rpc/WEBSES/create.asp`) and `Java/jviewer.jnlp`
-endpoints were verified live against it.
+The config ([`nojava-ipmi-kvmrc.example.yaml`](nojava-ipmi-kvmrc.example.yaml)) is
+tuned for this BMC — AMI MegaRAC login (`rpc/WEBSES/create.asp`) + `Java/jviewer.jnlp`,
+verified live. Set `login_user` to your BMC account; the password is **prompted at
+runtime** (never written to disk).
 
-Notes:
-- The password is **prompted at runtime** — never written to disk.
-- Over a VPN the console is usable but laggy (BMC RTT can reach ~0.5–0.7 s).
-- If the applet fails to load, try another `java_version` in the config
-  (`8u91`, `7u79`) — AMI/JViewer builds are picky about the exact JRE.
+### 2. Build the legacy-TLS image (required for this BMC)
+
+This BMC only speaks **TLS 1.0 + RC4-MD5**. Modern OpenSSL/Python — including the
+one inside nojava's own container — refuses RC4, so the HTTPS login fails with
+`SSLV3_ALERT_HANDSHAKE_FAILURE`. The image in
+[`nojava-legacy-tls/`](nojava-legacy-tls/) re-enables RC4-MD5 (it replaces
+urllib3's `ssl_wrap_socket`). Build it tagged as the image the tool expects, so it
+is used locally without a re-pull:
+
+```sh
+docker build --platform linux/amd64 \
+  -t sciapp/nojava-ipmi-kvm:v0.9.2-openjdk-7 console/nojava-legacy-tls
+```
+
+### 3. Run
+
+```sh
+nojava-ipmi-kvm --debug lszesxi          # prompts for the BMC password
+```
+
+nojava prints a URL using the **container's internal hostname and port 8080**, e.g.
+`http://<container-id>:8080/vnc.html?...`, which your browser can't reach. Find the
+published port with `docker ps` (it maps 8080 to a random host port), then open:
+
+```
+http://localhost:<mapped-port>/vnc.html?host=localhost&port=<mapped-port>
+```
+
+Keep the `nojava-ipmi-kvm` terminal open — it holds the container (and the port).
+
+**If the BMC web UI is unresponsive** (MegaRAC web servers hang while IPMI still
+answers — HTTP times out but `ipmi_mc_info` works), cold-reset the BMC (restarts
+the controller, **not** the host; ~1–2 min):
+```sh
+ipmitool -I lanplus -H 192.168.1.12 -U <user> -f <passwordfile> mc reset cold
+```
 
 ## Approach 2 — SOL (Serial-over-LAN), text console  *(complementary)*
 
