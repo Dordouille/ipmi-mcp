@@ -4,16 +4,15 @@
 #     nojava-ipmi-kvm myserver
 # The tool spins up a container with an old Java Web Start, logs into the BMC,
 # launches the JViewer .jnlp, and serves the console in your browser via noVNC.
-# The BMC password is prompted at runtime — nothing is stored on disk.
+# The BMC password is prompted at runtime -- nothing is stored on disk.
 #
-# Endpoints below were verified live against this BMC: `rpc/WEBSES/create.asp`
-# returns HTTP 200 (AMI MegaRAC login), and the viewer is `Java/jviewer.jnlp`.
-# The BMC only speaks legacy TLS, which is exactly why the viewer must run in the
-# container's old Java stack rather than a modern local browser/JRE.
+# Requires the patched image built from ./megarac-patch (see README): without it
+# the viewer launches but can never reach the host's video.
 
 hosts:
   myserver:
     based_on: kvm-asmb8
+    # The BMC itself -- the physical host's management controller, not a VM.
     full_hostname: 192.0.2.10
 
 templates:
@@ -21,16 +20,23 @@ templates:
     skip_login: False
     login_user: admin
     login_endpoint: rpc/WEBSES/create.asp
-    # Self-signed cert + old TLS on the BMC → skip verification.
-    allow_insecure_ssl: True
     user_login_attribute_name: WEBVAR_USERNAME
     password_login_attribute_name: WEBVAR_PASSWORD
     send_post_data_as_json: False
     session_cookie_key: SessionCookie
-    download_endpoint: Java/jviewer.jnlp
-    # 7u79 -> the openjdk-7 image. This BMC only speaks TLS 1.0 + RC4-MD5, which
-    # even that image's OpenSSL/Python refuses out of the box, so the HTTPS login
-    # fails. Build the legacy-TLS image in ./nojava-legacy-tls (it re-enables
-    # RC4-MD5) and tag it as the exact image this pins to. See README.
+    allow_insecure_ssl: True
+
+    # Both query parameters are mandatory on this firmware:
+    #
+    #   JNLPSTR=JViewer  without it the BMC returns "Unable to find JNLP String"
+    #                    instead of the <application-desc> launch arguments.
+    #   EXTRNIP=<ip>     copied verbatim into JViewer's -hostname argument, so it
+    #                    must be the BMC's own address. Point it at the client by
+    #                    mistake and the viewer dutifully connects to the client.
+    #
+    # Keep this IP in sync with full_hostname above.
+    download_endpoint: "Java/jviewer.jnlp?EXTRNIP=192.0.2.10&JNLPSTR=JViewer"
+
+    # 7u79 selects the openjdk-7 image, which is what ./megarac-patch builds on.
     java_version: 7u79
     format_jnlp: False
