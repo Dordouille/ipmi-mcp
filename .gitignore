@@ -19,3 +19,9 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Screenshots / images dropped in the tree
+*.png
+*.jpg
+*.jpeg
+Capture*
